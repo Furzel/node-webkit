@@ -21,12 +21,12 @@
 #include "content/nw/src/api/clipboard/clipboard.h"
 
 #include "base/values.h"
-#include "base/utf_string_conversions.h"
-#include "base/string16.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/strings/string16.h"
 #include "content/nw/src/api/dispatcher_host.h"
 #include "ui/base/clipboard/clipboard.h"
 
-namespace api {
+namespace nwapi {
 
 Clipboard::Clipboard(int id,
            DispatcherHost* dispatcher_host,
@@ -68,19 +68,19 @@ void Clipboard::SetText(std::string& text) {
   ui::Clipboard::ObjectMap map;
   map[ui::Clipboard::CBF_TEXT].push_back(
       std::vector<char>(text.begin(), text.end()));
-  clipboard->WriteObjects(ui::Clipboard::BUFFER_STANDARD, map);
+  clipboard->WriteObjects(ui::CLIPBOARD_TYPE_COPY_PASTE, map);
 }
 
 std::string Clipboard::GetText() {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   string16 text;
-  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &text);
+  clipboard->ReadText(ui::CLIPBOARD_TYPE_COPY_PASTE, &text);
   return UTF16ToUTF8(text);
 }
 
 void Clipboard::Clear() {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  clipboard->Clear(ui::Clipboard::BUFFER_STANDARD);
+  clipboard->Clear(ui::CLIPBOARD_TYPE_COPY_PASTE);
 }
 
-}  // namespace api
+}  // namespace nwapi

@@ -47,6 +47,7 @@ class NativeWindowGtk;
 #elif defined(OS_WIN)
 #include "content/nw/src/api/menu/menu_delegate_win.h"
 #include "ui/views/controls/menu/native_menu_win.h"
+#include "chrome/browser/status_icons/status_icon_menu_model.h"
 
 namespace nw {
 class NativeWindowWin;
@@ -74,7 +75,7 @@ namespace content {
 class Shell;
 }
 
-namespace api {
+namespace nwapi {
 
 class MenuItem;
 
@@ -109,7 +110,7 @@ class Menu : public Base {
 #elif defined(OS_WIN)
   friend class nw::NativeWindowWin;
 
-  void Rebuild(const gfx::NativeMenu *parent_menu = NULL);
+  void Rebuild(const HMENU *parent_menu = NULL);
 
   // Flag to indicate the menu has been modified since last show, so we should
   // rebuild the menu before next show.
@@ -126,6 +127,6 @@ class Menu : public Base {
   DISALLOW_COPY_AND_ASSIGN(Menu);
 };
 
-}  // namespace api
+}  // namespace nwapi
 
 #endif  // CONTENT_NW_SRC_API_MENU_MENU_H_

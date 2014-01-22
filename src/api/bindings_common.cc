@@ -26,8 +26,8 @@
 #include "content/public/renderer/render_view.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/v8_value_converter.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/WebKit/public/web/WebFrame.h"
 #include "ui/base/resource/resource_bundle.h"
 
 using content::RenderView;
@@ -36,8 +36,9 @@ using content::V8ValueConverter;
 using WebKit::WebFrame;
 using WebKit::WebView;
 
-RenderView* GetCurrentRenderView() {
-  WebFrame* frame = WebFrame::frameForCurrentContext();
+namespace {
+RenderView* GetRenderView(v8::Handle<v8::Context> ctx) {
+  WebFrame* frame = WebFrame::frameForContext(ctx);
   if (!frame)
     return NULL;
 
@@ -49,11 +50,33 @@ RenderView* GetCurrentRenderView() {
   return render_view;
 }
 
+}
+
+RenderView* GetCurrentRenderView() {
+  v8::Local<v8::Context> ctx = v8::Context::GetCurrent();
+  return GetRenderView(ctx);
+}
+
+RenderView* GetEnteredRenderView() {
+  v8::Local<v8::Context> ctx = v8::Context::GetEntered();
+  return GetRenderView(ctx);
+}
+
 base::StringPiece GetStringResource(int resource_id) {
   return ResourceBundle::GetSharedInstance().GetRawDataResource(resource_id);
 }
 
 namespace remote {
+
+v8::Handle<v8::Value> AllocateId(int routing_id) {
+  v8::HandleScope scope;
+
+  int result = 0;
+  RenderThread::Get()->Send(new ShellViewHostMsg_AllocateId(
+      routing_id,
+      &result));
+  return scope.Close(v8::Integer::New(result));
+}
 
 v8::Handle<v8::Value> AllocateObject(int routing_id,
                                      int object_id,
@@ -70,6 +93,8 @@ v8::Handle<v8::Value> AllocateObject(int routing_id,
       !value_option->IsType(base::Value::TYPE_DICTIONARY))
     return v8::ThrowException(v8::Exception::Error(v8::String::New(
         "Unable to convert 'option' passed to AllocateObject")));
+
+  DVLOG(1) << "remote::AllocateObject(routing_id=" << routing_id << ", object_id=" << object_id << ")";
 
   RenderThread::Get()->Send(new ShellViewHostMsg_Allocate_Object(
       routing_id,

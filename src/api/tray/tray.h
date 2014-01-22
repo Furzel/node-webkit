@@ -40,7 +40,7 @@ class StatusIcon;
 class StatusTray;
 #endif  // defined(OS_MACOSX)
 
-namespace api {
+namespace nwapi {
 
 class Menu;
 class TrayObserver;
@@ -65,6 +65,8 @@ class Tray : public Base {
   void SetTooltip(const std::string& title);
   void SetMenu(Menu* menu);
   void Remove();
+  // Alternate icons only work with Macs
+  void SetAltIcon(const std::string& alticon_path);
 
 #if defined(OS_MACOSX)
   __block NSStatusItem* status_item_;
@@ -92,6 +94,6 @@ class Tray : public Base {
   DISALLOW_COPY_AND_ASSIGN(Tray);
 };
 
-}  // namespace api
+}  // namespace nwapi
 
 #endif  // CONTENT_NW_SRC_API_TRAY_TRAY_H_

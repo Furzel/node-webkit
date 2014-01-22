@@ -15,14 +15,16 @@ extern const char kNoToolbar[];
 extern const char kUrl[];
 extern const char kWorkingDirectory[];
 extern const char kNodeMain[];
+extern const char kSnapshot[];
+extern const char kDomStorageQuota[];
 
 // Manifest settings
 extern const char kmMain[];
 extern const char kmName[];
 extern const char kmWebkit[];
-extern const char kmNodejs[];
 extern const char kmWindow[];
 extern const char kmChromiumArgs[];
+extern const char kmJsFlags[];
 
 extern const char kmSingleInstance[];
 
@@ -46,6 +48,7 @@ extern const char kmFullscreen[];
 extern const char kmShowInTaskbar[];
 extern const char kmKiosk[];
 extern const char kmAlwaysOnTop[];
+extern const char kmInitialFocus[];
 
 extern const char kmWebgl[];
 extern const char kmJava[];
@@ -54,6 +57,13 @@ extern const char kmPageCache[];
 extern const char kmUserAgent[];
 extern const char kmRemotePages[];
 extern const char kmNewInstance[];
+extern const char kmInjectJSDocStart[];
+extern const char kmInjectJSDocEnd[];
+extern const char kmInjectCSS[];
+
+#if defined(OS_WIN)
+extern const char kPrintRaster[];
+#endif
 }  // namespace switches
 
 #endif  // CONTENT_NW_SRC_SHELL_SWITCHES_H_

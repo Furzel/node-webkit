@@ -1,16 +1,16 @@
 // Copyright (c) 2012 Intel Corp
 // Copyright (c) 2012 The Chromium Authors
-// 
-// Permission is hereby granted, free of charge, to any person obtaining a copy 
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 //  in the Software without restriction, including without limitation the rights
 //  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell co
 // pies of the Software, and to permit persons to whom the Software is furnished
 //  to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in al
 // l copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM
 // PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNES
 // S FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
@@ -21,11 +21,13 @@
 #include "content/nw/src/nw_shell.h"
 
 #include "base/command_line.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/utf_string_conversions.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_http_handler.h"
 #include "content/public/browser/devtools_manager.h"
@@ -38,9 +40,13 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/renderer_preferences.h"
 #include "content/public/common/url_constants.h"
 #include "content/nw/src/api/api_messages.h"
+#include "content/nw/src/api/dispatcher_host.h"
 #include "content/nw/src/api/app/app.h"
+#include "content/nw/src/browser/browser_dialogs.h"
 #include "content/nw/src/browser/file_select_helper.h"
 #include "content/nw/src/browser/native_window.h"
 #include "content/nw/src/browser/shell_devtools_delegate.h"
@@ -51,9 +57,22 @@
 #include "content/nw/src/shell_browser_context.h"
 #include "content/nw/src/shell_browser_main_parts.h"
 #include "content/nw/src/shell_content_browser_client.h"
+#include "content/nw/src/shell_devtools_frontend.h"
+
 #include "grit/nw_resources.h"
 #include "net/base/escape.h"
 #include "ui/base/resource/resource_bundle.h"
+
+
+#if defined(OS_WIN)
+#include "content/nw/src/browser/native_window_win.h"
+#include "ui/views/controls/webview/webview.h"
+using nw::NativeWindowWin;
+#endif
+
+#include "content/nw/src/browser/printing/print_view_manager.h"
+
+using base::MessageLoop;
 
 namespace content {
 
@@ -63,6 +82,7 @@ bool Shell::quit_message_loop_ = true;
 
 int Shell::exit_code_ = 0;
 
+// static
 Shell* Shell::Create(BrowserContext* browser_context,
                      const GURL& url,
                      SiteInstance* site_instance,
@@ -74,29 +94,66 @@ Shell* Shell::Create(BrowserContext* browser_context,
 
   Shell* shell = new Shell(web_contents, GetPackage()->window());
   NavigationController::LoadURLParams params(url);
-  params.transition_type = PAGE_TRANSITION_TYPED;
+  params.transition_type = PageTransitionFromInt(PAGE_TRANSITION_TYPED);
   params.override_user_agent = NavigationController::UA_OVERRIDE_TRUE;
+  params.frame_name = std::string();
 
   web_contents->GetController().LoadURLWithParams(params);
 
   return shell;
 }
 
+// static
+Shell* Shell::Create(WebContents* source_contents,
+                     const GURL& target_url,
+                     base::DictionaryValue* manifest,
+                     WebContents* new_contents) {
+  Shell* shell = new Shell(new_contents, manifest);
+
+  if (!target_url.is_empty()) {
+    NavigationController::LoadURLParams params(target_url);
+    params.transition_type = PageTransitionFromInt(PAGE_TRANSITION_TYPED);
+    params.override_user_agent = NavigationController::UA_OVERRIDE_TRUE;
+    params.frame_name = std::string();
+
+    new_contents->GetController().LoadURLWithParams(params);
+  }
+  // Use the user agent value from the source WebContents.
+  std::string source_user_agent =
+      source_contents->GetMutableRendererPrefs()->user_agent_override;
+  RendererPreferences* prefs = source_contents->GetMutableRendererPrefs();
+  prefs->user_agent_override = source_user_agent;
+
+  return shell;
+}
+
+
 Shell* Shell::FromRenderViewHost(RenderViewHost* rvh) {
   for (size_t i = 0; i < windows_.size(); ++i) {
-    if (windows_[i]->web_contents() &&
-        windows_[i]->web_contents()->GetRenderViewHost() == rvh) {
+    WebContents* web_contents = windows_[i]->web_contents();
+    if (!web_contents)
+      continue;
+    if (web_contents->GetRenderViewHost() == rvh) {
       return windows_[i];
+    }else{
+      WebContentsImpl* impl = static_cast<WebContentsImpl*>(web_contents);
+      RenderViewHostManager* rvhm = impl->GetRenderManagerForTesting();
+      if (rvhm && static_cast<RenderViewHost*>(rvhm->pending_render_view_host()) == rvh)
+        return windows_[i];
     }
   }
   return NULL;
 }
 
 Shell::Shell(WebContents* web_contents, base::DictionaryValue* manifest)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)),
-      is_devtools_(false),
-      force_close_(false),
-      id_(-1) {
+  : content::WebContentsObserver(web_contents),
+  devtools_window_id_(0),
+  is_devtools_(false),
+  force_close_(false),
+  id_(-1),
+  enable_nodejs_(true),
+  weak_ptr_factory_(this)
+{
   // Register shell.
   registrar_.Add(this, NOTIFICATION_WEB_CONTENTS_TITLE_UPDATED,
       Source<WebContents>(web_contents));
@@ -104,21 +161,49 @@ Shell::Shell(WebContents* web_contents, base::DictionaryValue* manifest)
                  NotificationService::AllBrowserContextsAndSources());
   windows_.push_back(this);
 
+  enable_nodejs_ = GetPackage()->GetUseNode();
+  VLOG(1) << "enable nodejs from manifest: " << enable_nodejs_;
+
   // Add web contents.
   web_contents_.reset(web_contents);
   content::WebContentsObserver::Observe(web_contents);
   web_contents_->SetDelegate(this);
 
   // Create window.
-  window_.reset(nw::NativeWindow::Create(this, manifest));
+  window_.reset(nw::NativeWindow::Create(weak_ptr_factory_.GetWeakPtr(), manifest));
 
-  // Initialize window after we set window_, because some operations of 
-  // NativeWindow requires the window_ to be non-NULL. 
+#if defined(ENABLE_PRINTING)
+  printing::PrintViewManager::CreateForWebContents(web_contents);
+#endif
+
+  // Initialize window after we set window_, because some operations of
+  // NativeWindow requires the window_ to be non-NULL.
   window_->InitFromManifest(manifest);
 }
 
 Shell::~Shell() {
   SendEvent("closed");
+
+  if (is_devtools_ && devtools_owner_.get()) {
+    devtools_owner_->SendEvent("devtools-closed");
+    nwapi::DispatcherHost* dhost = nwapi::FindDispatcherHost(devtools_owner_->web_contents_->GetRenderViewHost());
+    if (devtools_owner_->devtools_window_id_) {
+      dhost->OnDeallocateObject(devtools_owner_->devtools_window_id_);
+      devtools_owner_->devtools_window_id_ = 0;
+    }else if (id_) {
+      //FIXME: the ownership/ flow of window and shell destruction
+      //need to be cleared
+
+      // In linux, Shell destruction will be called immediately in
+      // CloseDevTools but in OSX it won't
+      dhost->OnDeallocateObject(id_);
+    }
+  }
+
+  if (!is_devtools_ && id_ > 0) {
+    nwapi::DispatcherHost* dhost = nwapi::FindDispatcherHost(web_contents_->GetRenderViewHost());
+    dhost->OnDeallocateObject(id_);
+  }
 
   for (size_t i = 0; i < windows_.size(); ++i) {
     if (windows_[i] == this) {
@@ -131,27 +216,45 @@ Shell::~Shell() {
     }
   }
 
-  if (windows_.empty() && quit_message_loop_)
-    api::App::Quit(web_contents()->GetRenderProcessHost());
+  if (windows_.empty() && quit_message_loop_) {
+    // If Window object is not clearred here, the Window destructor
+    // will be called at exit and block the thread exiting on
+    // Notification registrar destruction
+    nwapi::DispatcherHost::ClearObjectRegistry();
+    nwapi::App::Quit(web_contents()->GetRenderProcessHost());
+  }
 }
 
 void Shell::SendEvent(const std::string& event, const std::string& arg1) {
-  if (id() < 0)
-    return;
-
   base::ListValue args;
   if (!arg1.empty())
     args.AppendString(arg1);
-
-  web_contents()->GetRenderViewHost()->Send(new ShellViewMsg_Object_On_Event(
-      web_contents()->GetRoutingID(), id(), event, args));
+  SendEvent(event, args);
 }
 
-bool Shell::ShouldCloseWindow() {
+void Shell::SendEvent(const std::string& event, const base::ListValue& args) {
+
+  if (id() < 0)
+    return;
+
+  DVLOG(1) << "Shell::SendEvent " << event << " id():"
+           << id() << " RoutingID: " << web_contents()->GetRoutingID();
+
+  WebContents* web_contents;
+  if (is_devtools_ && devtools_owner_.get())
+    web_contents = devtools_owner_->web_contents();
+  else
+    web_contents = this->web_contents();
+
+  web_contents->GetRenderViewHost()->Send(new ShellViewMsg_Object_On_Event(
+      web_contents->GetRoutingID(), id(), event, args));
+}
+
+bool Shell::ShouldCloseWindow(bool quit) {
   if (id() < 0 || force_close_)
     return true;
 
-  SendEvent("close");
+  SendEvent("close", quit ? "quit" : "");
   return false;
 }
 
@@ -177,7 +280,7 @@ void Shell::PrintCriticalError(const std::string& title,
     std::vector<std::string> subst;
     subst.push_back(title);
     subst.push_back(content_with_no_space);
-    error_page_url = "data:text/html;charset=utf-8," + 
+    error_page_url = "data:text/html;charset=utf-8," +
         net::EscapeQueryParamValue(
             ReplaceStringPlaceholders(template_html, subst, NULL), false);
   }
@@ -186,7 +289,7 @@ void Shell::PrintCriticalError(const std::string& title,
 }
 
 nw::Package* Shell::GetPackage() {
-  ShellContentBrowserClient* browser_client = 
+  ShellContentBrowserClient* browser_client =
       static_cast<ShellContentBrowserClient*>(GetContentClient()->browser());
   return browser_client->shell_browser_main_parts()->package();
 }
@@ -197,13 +300,13 @@ void Shell::LoadURL(const GURL& url) {
       Referrer(),
       PAGE_TRANSITION_TYPED,
       std::string());
-  web_contents_->Focus();
+  web_contents_->GetView()->Focus();
   window()->SetToolbarButtonEnabled(nw::NativeWindow::BUTTON_FORWARD, false);
 }
 
 void Shell::GoBackOrForward(int offset) {
   web_contents_->GetController().GoToOffset(offset);
-  web_contents_->Focus();
+  web_contents_->GetView()->Focus();
 }
 
 void Shell::Reload(ReloadType type) {
@@ -229,12 +332,12 @@ void Shell::Reload(ReloadType type) {
       break;
   }
 
-  web_contents_->Focus();
+  web_contents_->GetView()->Focus();
 }
 
 void Shell::Stop() {
   web_contents_->Stop();
-  web_contents_->Focus();
+  web_contents_->GetView()->Focus();
 }
 
 void Shell::ReloadOrStop() {
@@ -244,7 +347,28 @@ void Shell::ReloadOrStop() {
     Reload();
 }
 
-void Shell::ShowDevTools() {
+void Shell::CloseDevTools() {
+  if (!devtools_window_)
+    return;
+  devtools_window_->window()->Close();
+  devtools_window_.reset();
+  devtools_window_id_ = 0;
+}
+
+int Shell::WrapDevToolsWindow() {
+  if (devtools_window_id_)
+    return devtools_window_id_;
+  if (!devtools_window_)
+    return 0;
+  nwapi::DispatcherHost* dhost = nwapi::FindDispatcherHost(devtools_window_->web_contents_->GetRenderViewHost());
+  int object_id = dhost->AllocateId();
+  base::DictionaryValue manifest;
+  dhost->OnAllocateObject(object_id, "Window", manifest);
+  devtools_window_id_ = object_id;
+  return object_id;
+}
+
+void Shell::ShowDevTools(const char* jail_id, bool headless) {
   ShellContentBrowserClient* browser_client =
       static_cast<ShellContentBrowserClient*>(
           GetContentClient()->browser());
@@ -255,18 +379,29 @@ void Shell::ShowDevTools() {
   }
 
   RenderViewHost* inspected_rvh = web_contents()->GetRenderViewHost();
-  scoped_refptr<DevToolsAgentHost> agent(DevToolsAgentHost::GetFor(inspected_rvh));
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  DevToolsClientHost* host = manager->GetDevToolsClientHostFor(agent.get());
+  if (nodejs()) {
+    std::string jscript = std::string("require('nw.gui').Window.get().__setDevToolsJail('")
+      + (jail_id ? jail_id : "(null)") + "');";
+    inspected_rvh->ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(jscript.c_str()));
+  }
 
-  if (host) {
+  scoped_refptr<DevToolsAgentHost> agent(DevToolsAgentHost::GetOrCreateFor(inspected_rvh));
+  DevToolsManager* manager = DevToolsManager::GetInstance();
+
+  if (agent->IsAttached()) {
     // Break remote debugging debugging session.
-    manager->UnregisterDevToolsClientHostFor(agent.get());
+    manager->CloseAllClientHosts();
   }
 
   ShellDevToolsDelegate* delegate =
       browser_client->shell_browser_main_parts()->devtools_delegate();
-  GURL url = delegate->devtools_http_handler()->GetFrontendURL(agent.get());
+  GURL url = delegate->devtools_http_handler()->GetFrontendURL();
+
+  SendEvent("devtools-opened", url.spec());
+  if (headless) {
+    // FIXME: DevToolsFrontendHost
+    return;
+  }
 
   // Use our minimum set manifest
   base::DictionaryValue manifest;
@@ -285,14 +420,22 @@ void Shell::ShowDevTools() {
   WebContents::CreateParams create_params(web_contents()->GetBrowserContext(), NULL);
   WebContents* web_contents = WebContents::Create(create_params);
   Shell* shell = new Shell(web_contents, &manifest);
-  browser_context->set_pinning_renderer(true);
+
+  new ShellDevToolsFrontend(
+      shell,
+      DevToolsAgentHost::GetOrCreateFor(inspected_rvh).get());
 
   int rh_id = shell->web_contents_->GetRenderProcessHost()->GetID();
   ChildProcessSecurityPolicyImpl::GetInstance()->GrantScheme(rh_id, chrome::kFileScheme);
+  ChildProcessSecurityPolicyImpl::GetInstance()->GrantScheme(rh_id, "app");
   shell->is_devtools_ = true;
+  shell->devtools_owner_ = weak_ptr_factory_.GetWeakPtr();
   shell->force_close_ = true;
   shell->LoadURL(url);
 
+  // LoadURL() could allocate new SiteInstance so we have to pin the
+  // renderer after it
+  browser_context->set_pinning_renderer(true);
   // Save devtools window in current shell.
   devtools_window_ = shell->weak_ptr_factory_.GetWeakPtr();
 }
@@ -330,6 +473,9 @@ void Shell::LoadingStateChanged(WebContents* source) {
   window()->SetToolbarButtonEnabled(nw::NativeWindow::BUTTON_FORWARD,
                                     current_index < max_index);
   window()->SetToolbarIsLoading(source->IsLoading());
+
+  DVLOG(1) << "Shell(" << id() << ")::LoadingStateChanged "
+           << (source->IsLoading() ? "loading" : "loaded");
 
   if (source->IsLoading())
     SendEvent("loading");
@@ -371,6 +517,7 @@ bool Shell::IsPopupOrPanel(const WebContents* source) const {
 // Window opened by window.open
 void Shell::WebContentsCreated(WebContents* source_contents,
                                int64 source_frame_id,
+                               const string16& frame_name,
                                const GURL& target_url,
                                WebContents* new_contents) {
   // Create with package's manifest
@@ -389,8 +536,27 @@ void Shell::WebContentsCreated(WebContents* source_contents,
     manifest->SetInteger(switches::kmX, features.x);
   if (features.ySet)
     manifest->SetInteger(switches::kmY, features.y);
+  // window.open should show the window by default.
+  manifest->SetBoolean(switches::kmShow, true);
 
-  new Shell(new_contents, manifest.get());
+  // don't pass the url on window.open case
+  Shell::Create(source_contents, GURL::EmptyGURL(), manifest.get(), new_contents);
+
+  // in Chromium 32 RenderViewCreated will not be called so the case
+  // should be handled here
+  new nwapi::DispatcherHost(new_contents->GetRenderViewHost());
+}
+
+#if defined(OS_WIN)
+void Shell::WebContentsFocused(content::WebContents* web_contents) {
+  NativeWindowWin* win = static_cast<NativeWindowWin*>(window_.get());
+  win->web_view_->OnWebContentsFocused(web_contents);
+}
+#endif
+
+content::ColorChooser*
+Shell::OpenColorChooser(content::WebContents* web_contents, SkColor color) {
+  return nw::ShowColorChooser(web_contents, color);
 }
 
 void Shell::RunFileChooser(WebContents* web_contents,
@@ -408,7 +574,7 @@ void Shell::DidNavigateMainFramePostCommit(WebContents* web_contents) {
   window()->SetToolbarUrlEntry(web_contents->GetURL().spec());
 }
 
-JavaScriptDialogCreator* Shell::GetJavaScriptDialogCreator() {
+JavaScriptDialogManager* Shell::GetJavaScriptDialogManager() {
   if (!dialog_creator_.get())
     dialog_creator_.reset(new ShellJavaScriptDialogCreator());
   return dialog_creator_.get();
@@ -464,6 +630,17 @@ void Shell::Observe(int type,
 #endif
     MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
   }
+}
+
+GURL Shell::OverrideDOMStorageOrigin(const GURL& origin) {
+  if (!is_devtools())
+    return origin;
+  return GURL("devtools://");
+}
+
+void Shell::RenderViewCreated(RenderViewHost* render_view_host) {
+  //FIXME: handle removal
+  new nwapi::DispatcherHost(render_view_host);
 }
 
 }  // namespace content

@@ -24,7 +24,7 @@
 #import <Cocoa/Cocoa.h>
 #include "content/nw/src/api/menu/menu.h"
 
-namespace api {
+namespace nwapi {
 
 void Tray::Create(const base::DictionaryValue& option) {
   NSStatusBar *status_bar = [NSStatusBar systemStatusBar];
@@ -55,6 +55,17 @@ void Tray::SetIcon(const std::string& icon) {
   }
 }
 
+void Tray::SetAltIcon(const std::string& alticon) {
+  if (!alticon.empty()) {
+    NSImage* image = [[NSImage alloc]
+         initWithContentsOfFile:[NSString stringWithUTF8String:alticon.c_str()]];
+    [status_item_ setAlternateImage:image];
+    [image release];
+  } else {
+    [status_item_ setAlternateImage:nil];
+  }
+}
+
 void Tray::SetTooltip(const std::string& tooltip) {
   [status_item_ setToolTip:[NSString stringWithUTF8String:tooltip.c_str()]];
 }
@@ -67,4 +78,4 @@ void Tray::Remove() {
   [[NSStatusBar systemStatusBar] removeStatusItem:status_item_];
 }
 
-}  // namespace api
+}  // namespace nwapi

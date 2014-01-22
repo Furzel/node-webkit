@@ -25,7 +25,14 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_http_handler_delegate.h"
+#include "content/public/browser/render_view_host.h"
+#include "content/public/browser/web_contents.h"
+
+namespace base {
+class FilePath;
+}
 
 namespace content {
 
@@ -43,9 +50,13 @@ class ShellDevToolsDelegate : public DevToolsHttpHandlerDelegate {
   // DevToolsHttpProtocolHandler::Delegate overrides.
   virtual std::string GetDiscoveryPageHTML() OVERRIDE;
   virtual bool BundlesFrontendResources() OVERRIDE;
-  virtual FilePath GetDebugFrontendDir() OVERRIDE;
+  virtual base::FilePath GetDebugFrontendDir() OVERRIDE;
   virtual std::string GetPageThumbnailData(const GURL& url) OVERRIDE;
-  virtual RenderViewHost* CreateNewTarget() OVERRIDE;
+  virtual scoped_ptr<DevToolsTarget> CreateNewTarget(const GURL& url) OVERRIDE;
+  virtual void EnumerateTargets(TargetCallback callback) OVERRIDE;
+  virtual scoped_ptr<net::StreamListenSocket> CreateSocketForTethering(
+      net::StreamListenSocket::Delegate* delegate,
+      std::string* name) OVERRIDE;
 
   DevToolsHttpHandler* devtools_http_handler() {
     return devtools_http_handler_;

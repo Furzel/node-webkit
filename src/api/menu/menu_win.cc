@@ -71,7 +71,7 @@ bool NwMenuModel::HasIcons() const {
 
 } // namespace ui
 
-namespace api {
+namespace nwapi {
 
 // The width of the icon for the menuitem
 static const int kIconWidth = 16;
@@ -133,31 +133,29 @@ void Menu::Popup(int x, int y, content::Shell* shell) {
 
   // Map point from document to screen.
   POINT screen_point = { x, y };
-  ClientToScreen(shell->web_contents()->GetView()->GetNativeView(),
+  ClientToScreen((HWND)shell->web_contents()->GetView()->GetNativeView(),
                  &screen_point);
 
   menu_->RunMenuAt(gfx::Point(screen_point.x, screen_point.y),
                    views::Menu2::ALIGN_TOPLEFT);
 }
 
-void Menu::Rebuild(const gfx::NativeMenu *parent_menu) {
+void Menu::Rebuild(const HMENU *parent_menu) {
   if (is_menu_modified_) {
     // Refresh menu before show.
-    menu_->Rebuild();
+    menu_->Rebuild(NULL);
+    menu_->UpdateStates();
     for (size_t index = 0; index < icon_bitmaps_.size(); ++index) {
       ::DeleteObject(icon_bitmaps_[index]);
     }
     icon_bitmaps_.clear();
 
-    gfx::NativeMenu native_menu = parent_menu == NULL ?
+    HMENU native_menu = parent_menu == NULL ?
         menu_->GetNativeMenu() : *parent_menu;
 
-    int first_item_index =
-        menu_model_->GetFirstItemIndex(native_menu);
-    for (int menu_index = first_item_index;
-          menu_index < first_item_index + menu_model_->GetItemCount();
-          ++menu_index) {
-      int model_index = menu_index - first_item_index;
+    for (int model_index = 0;
+         model_index < menu_model_->GetItemCount();
+         ++model_index) {
       int command_id = menu_model_->GetCommandIdAt(model_index);
 
       if (menu_model_->GetTypeAt(model_index) == ui::MenuModel::TYPE_COMMAND ||
@@ -187,4 +185,4 @@ void Menu::Rebuild(const gfx::NativeMenu *parent_menu) {
   }
 }
 
-}  // namespace api
+}  // namespace nwapi

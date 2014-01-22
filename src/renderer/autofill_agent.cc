@@ -21,16 +21,16 @@
 #include "content/nw/src/renderer/autofill_agent.h"
 
 #include "base/bind.h"
-#include "base/message_loop.h"
-#include "base/string_util.h"
-#include "base/string_split.h"
+#include "base/message_loop/message_loop.h"
+#include "base/strings/string_util.h"
+#include "base/strings/string_split.h"
 #include "content/public/renderer/render_view.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebNodeCollection.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebOptionElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "ui/base/keycodes/keyboard_codes.h"
+#include "third_party/WebKit/public/web/WebInputEvent.h"
+#include "third_party/WebKit/public/web/WebNode.h"
+#include "third_party/WebKit/public/web/WebNodeCollection.h"
+#include "third_party/WebKit/public/web/WebOptionElement.h"
+#include "third_party/WebKit/public/web/WebView.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 
 using WebKit::WebAutofillClient;
 using WebKit::WebFormElement;
@@ -88,26 +88,24 @@ void AppendDataListSuggestions(const WebKit::WebInputElement& element,
 
 AutofillAgent::AutofillAgent(content::RenderView* render_view)
     : content::RenderViewObserver(render_view),
-      ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+      weak_ptr_factory_(this) {
   render_view->GetWebView()->setAutofillClient(this);
 }
 
 AutofillAgent::~AutofillAgent() {
 }
 
-bool AutofillAgent::InputElementClicked(const WebInputElement& element,
+void AutofillAgent::InputElementClicked(const WebInputElement& element,
                                         bool was_focused,
                                         bool is_focused) {
-  if (was_focused || is_focused)
+  if (was_focused)
     ShowSuggestions(element, true, false, true);
 
-  return false;
 }
 
-bool AutofillAgent::InputElementLostFocus() {
-  return false;
+void AutofillAgent::InputElementLostFocus() {
 }
- 
+
 void AutofillAgent::didAcceptAutofillSuggestion(const WebNode& node,
                                                 const WebString& value,
                                                 const WebString& label,
@@ -154,7 +152,7 @@ void AutofillAgent::textFieldDidChange(const WebInputElement& element) {
   // properly at this point (http://bugs.webkit.org/show_bug.cgi?id=16976) and
   // it is needed to trigger autofill.
   weak_ptr_factory_.InvalidateWeakPtrs();
-  MessageLoop::current()->PostTask(
+  base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&AutofillAgent::TextFieldDidChangeImpl,
                    weak_ptr_factory_.GetWeakPtr(), element));
@@ -197,34 +195,26 @@ void AutofillAgent::ShowSuggestions(const WebInputElement& element,
 
   element_ = element;
 
-  // If autocomplete is disabled at the form level, then we might want to show
-  // a warning in place of suggestions. However, if autocomplete is disabled
-  // specifically for this field, we never want to show a warning. Otherwise,
-  // we might interfere with custom popups (e.g. search suggestions) used by
-  // the website. Also, if the field has no name, then we won't have values.
-  const WebFormElement form = element.form();
-  if ((!element.autoComplete() && (form.isNull() || form.autoComplete())) ||
-      element.nameForAutofill().isEmpty()) {
-    std::vector<string16> v;
-    std::vector<string16> l;
-    std::vector<string16> i;
-    std::vector<int> ids;
+  // TODO: Currently node-webkit didn't support HTML5 attribute |autocomplete|
+  // of the |input|.
+  std::vector<string16> v;
+  std::vector<string16> l;
+  std::vector<string16> i;
+  std::vector<int> ids;
+  AppendDataListSuggestions(element, &v, &l, &i, &ids);
 
-    AppendDataListSuggestions(element, &v, &l, &i, &ids);
+  WebKit::WebView* web_view = render_view()->GetWebView();
+  if (!web_view)
+    return;
 
-    WebKit::WebView* web_view = render_view()->GetWebView();
-    if (!web_view)
-      return;
-
-    if (v.empty()) {
-      // No suggestions, any popup currently showing is obsolete.
-      web_view->hidePopups();
-      return;
-    }
-
-    // Send to WebKit for display.
-    web_view->applyAutofillSuggestions(element, v, l, i, ids);
+  if (v.empty()) {
+    // No suggestions, any popup currently showing is obsolete.
+    web_view->hidePopups();
+    return;
   }
+
+  // Send to WebKit for display.
+  web_view->applyAutofillSuggestions(element, v, l, i, ids);
 }
 
 void AutofillAgent::AcceptDataListSuggestion(const string16& suggested_value) {
